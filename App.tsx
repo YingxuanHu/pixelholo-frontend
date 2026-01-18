@@ -16,8 +16,6 @@ type TrainFlags = {
   autoSelectEpoch: boolean;
   autoTuneProfile: boolean;
   autoBuildLexicon: boolean;
-  selectThorough: boolean;
-  selectUseWer: boolean;
   earlyStop: boolean;
 };
 
@@ -43,8 +41,6 @@ const defaultFlags: TrainFlags = {
   autoSelectEpoch: true,
   autoTuneProfile: true,
   autoBuildLexicon: true,
-  selectThorough: true,
-  selectUseWer: false,
   earlyStop: true,
 };
 
@@ -83,6 +79,7 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const warmedProfilesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const cached = localStorage.getItem('voxclone_api_base');
@@ -131,6 +128,23 @@ const App: React.FC = () => {
   const hasTrainedProfile = Boolean(currentProfileInfo?.has_profile);
   const hasData = Boolean(currentProfileInfo?.has_data);
 
+  const warmupProfile = useCallback(async (profileName: string) => {
+    if (!profileName) return;
+    if (warmedProfilesRef.current.has(profileName)) return;
+    warmedProfilesRef.current.add(profileName);
+    try {
+      const res = await fetch(`${apiBase}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speaker: profileName, text: 'warmup', return_base64: true }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
+    } catch (err) {
+      warmedProfilesRef.current.delete(profileName);
+    }
+  }, [apiBase]);
+
   const canProceedTo = (step: number) => {
     if (step === 1) return true;
     if (step === 2) return Boolean(profile.name);
@@ -138,6 +152,13 @@ const App: React.FC = () => {
     if (step === 4) return stepStatuses.train === 'done' || hasTrainedProfile;
     return false;
   };
+
+  useEffect(() => {
+    if (apiStatus !== 'online') return;
+    if (!hasTrainedProfile) return;
+    if (!profile.name) return;
+    warmupProfile(profile.name);
+  }, [apiStatus, hasTrainedProfile, profile.name, warmupProfile]);
 
   const streamResponseLines = async (response: Response, onLine: (line: string) => void) => {
     if (!response.body) return;
@@ -230,18 +251,16 @@ const App: React.FC = () => {
     setTrainLogs([createLog('Launching trainer...', 'info')]);
     setTrainStats(null);
 
-    const payload = {
-      profile: profile.name,
-      batch_size: trainParams.batchSize,
-      epochs: trainParams.epochs,
-      max_len: trainParams.maxLen,
-      auto_select_epoch: trainFlags.autoSelectEpoch,
-      auto_tune_profile: trainFlags.autoTuneProfile,
-      auto_build_lexicon: trainFlags.autoBuildLexicon,
-      select_thorough: trainFlags.selectThorough,
-      select_use_wer: trainFlags.selectUseWer,
-      early_stop: trainFlags.earlyStop,
-    };
+      const payload = {
+        profile: profile.name,
+        batch_size: trainParams.batchSize,
+        epochs: trainParams.epochs,
+        max_len: trainParams.maxLen,
+        auto_select_epoch: trainFlags.autoSelectEpoch,
+        auto_tune_profile: trainFlags.autoTuneProfile,
+        auto_build_lexicon: trainFlags.autoBuildLexicon,
+        early_stop: trainFlags.earlyStop,
+      };
 
     try {
       const res = await fetch(`${apiBase}/train`, {
@@ -391,8 +410,6 @@ const App: React.FC = () => {
     `--epochs ${trainParams.epochs}`,
     `--max_len ${trainParams.maxLen}`,
     trainFlags.autoSelectEpoch ? '--auto_select_epoch' : '',
-    trainFlags.selectThorough ? '--select_thorough' : '',
-    trainFlags.selectUseWer ? '--select_use_wer' : '',
     trainFlags.autoTuneProfile ? '--auto_tune_profile' : '',
     trainFlags.autoBuildLexicon ? '--auto_build_lexicon' : '',
     trainFlags.earlyStop ? '--early_stop' : '--no_early_stop',
@@ -625,8 +642,6 @@ const App: React.FC = () => {
                       ['Auto-select epoch', 'autoSelectEpoch'],
                       ['Auto-tune profile', 'autoTuneProfile'],
                       ['Build lexicon', 'autoBuildLexicon'],
-                      ['Thorough selection', 'selectThorough'],
-                      ['WER scoring', 'selectUseWer'],
                       ['Early stop', 'earlyStop'],
                     ].map(([label, key]) => (
                       <label key={key} className="flex items-center justify-between">
