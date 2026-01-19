@@ -321,20 +321,28 @@ const App: React.FC = () => {
     source.connect(gain);
     gain.connect(ctx.destination);
 
-    const attack = 0.01;
-    const release = 0.01;
-    const overlap = 0.008;
+    const fadeMs = 12;
+    const fadeTime = Math.min(fadeMs / 1000, Math.max(0.003, buffer.duration / 4));
+    const overlap = fadeTime;
     const startAt = Math.max(ctx.currentTime + 0.05, nextStartTimeRef.current);
-    const safeRelease = Math.min(release, Math.max(0.002, buffer.duration / 4));
-    const safeAttack = Math.min(attack, Math.max(0.002, buffer.duration / 4));
+    const endAt = startAt + buffer.duration;
+
+    const fadeSamples = Math.max(32, Math.floor(ctx.sampleRate * fadeTime));
+    const fadeIn = new Float32Array(fadeSamples);
+    const fadeOut = new Float32Array(fadeSamples);
+    for (let i = 0; i < fadeSamples; i += 1) {
+      const t = i / (fadeSamples - 1);
+      fadeIn[i] = Math.sin(t * Math.PI * 0.5);
+      fadeOut[i] = Math.cos(t * Math.PI * 0.5);
+    }
 
     gain.gain.setValueAtTime(0, startAt);
-    gain.gain.linearRampToValueAtTime(1, startAt + safeAttack);
-    gain.gain.setValueAtTime(1, Math.max(startAt + safeAttack, startAt + buffer.duration - safeRelease));
-    gain.gain.linearRampToValueAtTime(0, startAt + buffer.duration);
+    gain.gain.setValueCurveAtTime(fadeIn, startAt, fadeTime);
+    gain.gain.setValueAtTime(1, Math.max(startAt + fadeTime, endAt - fadeTime));
+    gain.gain.setValueCurveAtTime(fadeOut, Math.max(startAt, endAt - fadeTime), fadeTime);
 
     source.start(startAt);
-    nextStartTimeRef.current = startAt + buffer.duration - overlap;
+    nextStartTimeRef.current = endAt - overlap;
   };
 
   const startInference = useCallback(async () => {
